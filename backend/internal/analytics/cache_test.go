@@ -22,6 +22,13 @@ func TestCardsAllValid(t *testing.T) {
 				InputTokens:      1000,
 				EstimatedCostUSD: decimal.NewFromFloat(1.50),
 			},
+			TokensV2: &TokensV2CardRecord{
+				SessionID:  "test-session",
+				Version:    TokensV2CardVersion,
+				ComputedAt: now,
+				UpToLine:   upToLine,
+				Data:       TokensV2Data{TotalCostUSD: "0", ByProvider: map[string]TokensV2Provider{}},
+			},
 			Session: &SessionCardRecord{
 				SessionID:           "test-session",
 				Version:             SessionCardVersion,
@@ -108,6 +115,7 @@ func TestCardsAllValid(t *testing.T) {
 		cards := makeCards(upToLine)
 		// Override all versions with the specified version (for testing version mismatch)
 		cards.Tokens.Version = version
+		cards.TokensV2.Version = version
 		cards.Session.Version = version
 		cards.Tools.Version = version
 		cards.CodeActivity.Version = version
@@ -269,14 +277,15 @@ func TestCardsAllValid_Exhaustive(t *testing.T) {
 	for _, fieldName := range cardFields {
 		t.Run("nil_"+fieldName, func(t *testing.T) {
 			cards := &Cards{
-				Tokens:         &TokensCardRecord{Version: TokensCardVersion, ComputedAt: now, UpToLine: lineCount, EstimatedCostUSD: decimal.Zero},
-				Session:        &SessionCardRecord{Version: SessionCardVersion, ComputedAt: now, UpToLine: lineCount},
-				Tools:          &ToolsCardRecord{Version: ToolsCardVersion, ComputedAt: now, UpToLine: lineCount},
-				CodeActivity:   &CodeActivityCardRecord{Version: CodeActivityCardVersion, ComputedAt: now, UpToLine: lineCount},
-				Conversation:   &ConversationCardRecord{Version: ConversationCardVersion, ComputedAt: now, UpToLine: lineCount},
+				Tokens:          &TokensCardRecord{Version: TokensCardVersion, ComputedAt: now, UpToLine: lineCount, EstimatedCostUSD: decimal.Zero},
+				TokensV2:        &TokensV2CardRecord{Version: TokensV2CardVersion, ComputedAt: now, UpToLine: lineCount},
+				Session:         &SessionCardRecord{Version: SessionCardVersion, ComputedAt: now, UpToLine: lineCount},
+				Tools:           &ToolsCardRecord{Version: ToolsCardVersion, ComputedAt: now, UpToLine: lineCount},
+				CodeActivity:    &CodeActivityCardRecord{Version: CodeActivityCardVersion, ComputedAt: now, UpToLine: lineCount},
+				Conversation:    &ConversationCardRecord{Version: ConversationCardVersion, ComputedAt: now, UpToLine: lineCount},
 				AgentsAndSkills: &AgentsAndSkillsCardRecord{Version: AgentsAndSkillsCardVersion, ComputedAt: now, UpToLine: lineCount},
-				Redactions:     &RedactionsCardRecord{Version: RedactionsCardVersion, ComputedAt: now, UpToLine: lineCount},
-				Workflows:      &WorkflowsCardRecord{Version: WorkflowsCardVersion, ComputedAt: now, UpToLine: lineCount},
+				Redactions:      &RedactionsCardRecord{Version: RedactionsCardVersion, ComputedAt: now, UpToLine: lineCount},
+				Workflows:       &WorkflowsCardRecord{Version: WorkflowsCardVersion, ComputedAt: now, UpToLine: lineCount},
 			}
 
 			// Nil out this one field

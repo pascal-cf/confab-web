@@ -39,7 +39,7 @@ func (s *Store) GetCards(ctx context.Context, sessionID string) (*Cards, error) 
 	cards := &Cards{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	errs := make(chan error, 8)
+	errs := make(chan error, 9)
 
 	// Helper to run a getter in parallel
 	runGet := func(name string, fn func() error) {
@@ -59,6 +59,17 @@ func (s *Store) GetCards(ctx context.Context, sessionID string) (*Cards, error) 
 		}
 		mu.Lock()
 		cards.Tokens = result
+		mu.Unlock()
+		return nil
+	})
+
+	runGet("tokens_v2", func() error {
+		result, err := s.getTokensV2Card(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		cards.TokensV2 = result
 		mu.Unlock()
 		return nil
 	})
@@ -174,7 +185,7 @@ func (s *Store) UpsertCards(ctx context.Context, cards *Cards) error {
 	defer span.End()
 
 	var wg sync.WaitGroup
-	errs := make(chan error, 8)
+	errs := make(chan error, 9)
 
 	// Helper to run an upsert in parallel
 	runUpsert := func(name string, fn func() error) {
@@ -190,6 +201,12 @@ func (s *Store) UpsertCards(ctx context.Context, cards *Cards) error {
 	if cards.Tokens != nil {
 		runUpsert("tokens", func() error {
 			return s.upsertTokensCard(ctx, cards.Tokens)
+		})
+	}
+
+	if cards.TokensV2 != nil {
+		runUpsert("tokens_v2", func() error {
+			return s.upsertTokensV2Card(ctx, cards.TokensV2)
 		})
 	}
 
@@ -334,6 +351,67 @@ func (s *Store) upsertTokensCard(ctx context.Context, record *TokensCardRecord) 
 		record.EstimatedCostUSD.String(),
 		record.FastTurns,
 		record.FastCostUSD.String(),
+	)
+	return err
+}
+
+// =============================================================================
+// Tokens v2 card operations (hierarchical per-provider/per-model; OpenCode)
+// =============================================================================
+
+func (s *Store) getTokensV2Card(ctx context.Context, sessionID string) (*TokensV2CardRecord, error) {
+	query := `
+		SELECT session_id, version, computed_at, up_to_line, data
+		FROM session_card_tokens_v2
+		WHERE session_id = $1
+	`
+
+	var record TokensV2CardRecord
+	var dataJSON []byte
+	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
+		&record.SessionID,
+		&record.Version,
+		&record.ComputedAt,
+		&record.UpToLine,
+		&dataJSON,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(dataJSON, &record.Data); err != nil {
+		return nil, fmt.Errorf("unmarshaling tokens_v2 data: %w", err)
+	}
+
+	return &record, nil
+}
+
+func (s *Store) upsertTokensV2Card(ctx context.Context, record *TokensV2CardRecord) error {
+	dataJSON, err := json.Marshal(record.Data)
+	if err != nil {
+		return fmt.Errorf("marshaling tokens_v2 data: %w", err)
+	}
+
+	query := `
+		INSERT INTO session_card_tokens_v2 (
+			session_id, version, computed_at, up_to_line, data
+		) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (session_id) DO UPDATE SET
+			version = EXCLUDED.version,
+			computed_at = EXCLUDED.computed_at,
+			up_to_line = EXCLUDED.up_to_line,
+			data = EXCLUDED.data
+	`
+
+	_, err = s.db.ExecContext(ctx, query,
+		record.SessionID,
+		record.Version,
+		record.ComputedAt,
+		record.UpToLine,
+		dataJSON,
 	)
 	return err
 }
@@ -905,6 +983,25 @@ func (r *ComputeResult) ToCards(sessionID string, lineCount int64) *Cards {
 		}
 	}
 
+	// tokens_v2 is always written (empty data for providers that don't yet build
+	// the per-provider/per-model tree, e.g. Claude/Codex), so it participates in
+	// AllValid and the staleness gate exactly like the other cards — mirroring the
+	// Workflows card's "always written, empty for N/A sessions" pattern. It will
+	// eventually replace the flat tokens card for all providers.
+	if _, hasErr := r.CardErrors["tokens_v2"]; !hasErr {
+		data := TokensV2Data{TotalCostUSD: "0", ByProvider: map[string]TokensV2Provider{}}
+		if r.TokensV2 != nil {
+			data = *r.TokensV2
+		}
+		cards.TokensV2 = &TokensV2CardRecord{
+			SessionID:  sessionID,
+			Version:    TokensV2CardVersion,
+			ComputedAt: now,
+			UpToLine:   lineCount,
+			Data:       data,
+		}
+	}
+
 	if _, hasErr := r.CardErrors["session"]; !hasErr {
 		cards.Session = &SessionCardRecord{
 			SessionID:  sessionID,
@@ -1081,6 +1178,15 @@ func (c *Cards) ToResponse() *AnalyticsResponse {
 		}
 
 		response.Cards["tokens"] = tokensCard
+	}
+
+	// tokens_v2: hierarchical per-provider/per-model breakdown. Cached for every
+	// session (empty for providers that don't build the tree yet) so it shares the
+	// uniform staleness gate, but served only when it actually has provider data —
+	// so non-OpenCode responses are unchanged and the frontend keeps showing the
+	// flat tokens card. The stored Data is already the API wire shape.
+	if c.TokensV2 != nil && len(c.TokensV2.Data.ByProvider) > 0 {
+		response.Cards["tokens_v2"] = c.TokensV2.Data
 	}
 
 	if c.Session != nil {

@@ -36,6 +36,13 @@ import type {
   CodexAssistantSubcategory,
   CodexToolCallSubcategory,
 } from '@/components/session/codexCategories';
+import type {
+  OpenCodeFilterState,
+  OpenCodeHierarchicalCounts,
+  OpenCodeCategory,
+  OpenCodeRenderItem,
+} from '@/components/session/opencodeCategories';
+import type { RawOpenCodeLine } from '@/schemas/opencodeTranscript';
 
 export interface FilterAPI<TFilterState, TToggles> {
   state: TFilterState;
@@ -172,6 +179,18 @@ export type CodexAdapter = ProviderAdapter<
   CodexFilterState,
   CodexToggles,
   CodexHierarchicalCounts
+>;
+
+export interface OpenCodeToggles {
+  toggleCategory: (category: OpenCodeCategory) => void;
+}
+
+export type OpenCodeAdapter = ProviderAdapter<
+  RawOpenCodeLine,
+  OpenCodeRenderItem,
+  OpenCodeFilterState,
+  OpenCodeToggles,
+  OpenCodeHierarchicalCounts
 >;
 
 /**
